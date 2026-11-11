@@ -90,9 +90,12 @@ copy() {
 	sudo mkdir -p "$2"
 	sudo rsync -aH --numeric-ids "$1/" "$2/"
 }
-copy "$work/os/root" "$work/root"
-copy "$work/sysos/root" "$work/root/private/preboot/Cryptexes/OS"
-copy "$work/appos/root" "$work/root/private/preboot/Cryptexes/App"
+# The three copies are independent subtrees, each read by its own apfs-fuse process:
+# run them in parallel (an 8-core phone builds them together instead of one after another).
+copy "$work/os/root" "$work/root" &
+copy "$work/sysos/root" "$work/root/private/preboot/Cryptexes/OS" &
+copy "$work/appos/root" "$work/root/private/preboot/Cryptexes/App" &
+wait
 
 # Shared cache where dyld looks at ignition level 1: hard links, no extra space.
 dsc=private/preboot/Cryptexes/OS/System/Library/Caches/com.apple.dyld

@@ -19,6 +19,7 @@ df -h $R | tail -1'
 NBD=${NBD:-/dev/nbd12}
 # (a block device, in the installer's helper VM: as it is)
 [ -b $DISK ] && NBD=$DISK || { qemu-nbd -f qcow2 -c $NBD $DISK; sleep 1; }
+# the repair pass only (the -n verification read the whole volume again; the partition step's
+# fsck repairs the copy before it is booted)
 fsck.hfsplus -f -y $NBD | grep -v "Illegal name" | tail -4 || true
-fsck.hfsplus -f -n $NBD | tail -2 || true
 [ $NBD = $DISK ] || qemu-nbd -d $NBD > /dev/null

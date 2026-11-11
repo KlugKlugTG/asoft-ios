@@ -86,15 +86,18 @@ copy() {
 	mkdir -p "$2"
 	rsync -aH --numeric-ids "${@:3}" "$1/" "$2/"
 }
-copy "$(src sysos)" $R/private/preboot/Cryptexes/OS
-copy "$(src appos)" $R/private/preboot/Cryptexes/App
+# The three copies are independent subtrees, each read by its own apfs-fuse process:
+# run them in parallel (an 8-core phone builds them together instead of one after another).
+copy "$(src sysos)" $R/private/preboot/Cryptexes/OS &
+copy "$(src appos)" $R/private/preboot/Cryptexes/App &
+ex=()
+for e in $EXCLUDE; do ex+=(--exclude "$e/*"); done
+copy "$(src os)" $R "${ex[@]}" &
+wait
 if [ "${DROP_SYSOS:-0}" = 1 ]; then
 	fusermount -u $work/sysos
 	rm -v "$SYSOS"
 fi
-ex=()
-for e in $EXCLUDE; do ex+=(--exclude "$e/*"); done
-copy "$(src os)" $R "${ex[@]}"
 echo "$(date +%T) copied"
 df -h $R | tail -1
 
@@ -146,11 +149,13 @@ done
 stage=$R/.sysroot-stage
 rm -rf $stage && cp -a $SYSROOT $stage
 : > "$OUT.hashes"
-find $stage -type f | while read -r f; do
-	if head -c 4 "$f" | od -An -tx1 | grep -q 'cf fa ed fe'; then
-		python3 $S/adhoc_sign.py "$f" "com.asoft.$(basename "$f")" | cut -d' ' -f1 >> "$OUT.hashes"
-	fi
-done
+# One python process per file was one of the slow parts of the build on a phone: sign in
+# parallel. The hashes' order does not matter, mktc.py sorts its input.
+find "$stage" -type f -print0 | xargs -0 -P "$(nproc)" -I{} sh -c '
+	f=$1; s=$2
+	if head -c 4 "$f" | od -An -tx1 | grep -q "cf fa ed fe"; then
+		python3 "$s/adhoc_sign.py" "$f" "com.asoft.$(basename "$f")" | cut -d" " -f1
+	fi' _ {} "$S" >> "$OUT.hashes"
 rsync -rlptgo --ignore-existing $stage/ $R/	# not cp -a: no ACLs on Linux hfsplus
 rm -rf $stage
 echo "signed $(wc -l < "$OUT.hashes") sysroot binaries"
@@ -158,6 +163,7 @@ echo "signed $(wc -l < "$OUT.hashes") sysroot binaries"
 df -h $R | tail -1
 sync
 umount $R
+# the repair pass only: the -n verification that followed read the whole volume again, and the
+# next step's fsck repairs the partitioned copy before it is ever booted
 fsck.hfsplus -f -y $NBD | grep -v 'Illegal name' || true
-fsck.hfsplus -f -n $NBD | tail -3
 echo "$(date +%T) done: $OUT"
